@@ -281,13 +281,24 @@ function tankOverlaps(tank, ignoreTank) {
 // ============ SHOOTING ============
 function tryShoot(tank, isPlayer) {
   if (tank.shootCooldown > 0) return;
-  let bx = tank.x, by = tank.y;
   const offset = tank.size + 4;
-  if (tank.dir === DIR.UP) by -= offset;
-  else if (tank.dir === DIR.DOWN) by += offset;
-  else if (tank.dir === DIR.LEFT) bx -= offset;
-  else bx += offset;
-  bullets.push(createBullet(bx, by, tank.dir, isPlayer));
+  if (isPlayer) {
+    for (let d = 0; d < 4; d++) {
+      let bx = tank.x, by = tank.y;
+      if (d === DIR.UP) by -= offset;
+      else if (d === DIR.DOWN) by += offset;
+      else if (d === DIR.LEFT) bx -= offset;
+      else bx += offset;
+      bullets.push(createBullet(bx, by, d, true));
+    }
+  } else {
+    let bx = tank.x, by = tank.y;
+    if (tank.dir === DIR.UP) by -= offset;
+    else if (tank.dir === DIR.DOWN) by += offset;
+    else if (tank.dir === DIR.LEFT) bx -= offset;
+    else bx += offset;
+    bullets.push(createBullet(bx, by, tank.dir, false));
+  }
   tank.shootCooldown = tank.shootDelay;
 }
 
