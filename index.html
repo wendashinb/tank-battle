@@ -86,12 +86,13 @@ canvas {
   <div id="hud">
     <span>🏆 <span id="score">0</span></span>
     <span>🛡️ <span id="lives">3</span></span>
+    <span>⭐ <span id="invincible">0s</span></span>
     <span>👾 <span id="enemies">0</span></span>
     <span>📊 Lv.<span id="level">1</span></span>
   </div>
   <canvas id="game"></canvas>
   <div id="controls">
-    <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 或 <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> 移动 &nbsp;|&nbsp; <kbd>Space</kbd> 或 <kbd>J</kbd> 开火 &nbsp;|&nbsp; <kbd>R</kbd> 重新开始
+    <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 或 <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> 移动 &nbsp;|&nbsp; <kbd>Space</kbd> 或 <kbd>J</kbd> 开火 &nbsp;|&nbsp; <kbd>R</kbd> 重新开始 &nbsp;|&nbsp; 拾取 ⭐ 获得无敌
   </div>
 </div>
 
@@ -123,11 +124,12 @@ const COLORS = {
 };
 
 let score = 0, lives = 3, level = 1;
-let player, enemies, bullets, particles, walls;
+let player, enemies, bullets, particles, powerups, walls;
 let gameOver = false;
 let keys = {};
 let lastEnemySpawn = 0, enemySpawnInterval = 3000;
 let maxEnemies = 4;
+let lastPowerupSpawn = 0, powerupSpawnInterval = 15000;
 
 // ============ MAP ============
 const levelMaps = [
@@ -185,6 +187,7 @@ function createTank(cx, cy, dir, color, isPlayer) {
     size: CELL * 0.4,
     moving: false,
     alive: true,
+    invincibleTimer: 0,
   };
 }
 
@@ -209,6 +212,31 @@ function createParticle(x, y) {
 function explodeAt(x, y, count = 12) {
   for (let i = 0; i < count; i++) {
     particles.push(createParticle(x, y));
+  }
+}
+
+// ============ POWERUPS ============
+function createPowerup(x, y) {
+  return { x, y, alive: true, blink: 0 };
+}
+
+function spawnPowerup() {
+  let attempts = 0;
+  while (attempts < 50) {
+    const c = Math.floor(Math.random() * (COLS - 2)) + 1;
+    const r = Math.floor(Math.random() * (ROWS - 2)) + 1;
+    if (walls[r][c] === TILE.EMPTY) {
+      const px = c * CELL + CELL / 2;
+      const py = r * CELL + CELL / 2;
+      // Don't spawn on player
+      if (player.alive) {
+        const dx = px - player.x, dy = py - player.y;
+        if (Math.sqrt(dx * dx + dy * dy) < CELL * 3) { attempts++; continue; }
+      }
+      powerups.push(createPowerup(px, py));
+      return;
+    }
+    attempts++;
   }
 }
 
@@ -334,11 +362,27 @@ function update() {
     if (keys[' '] || keys['j']) tryShoot(player, true);
   }
 
+  // Invincibility timer
+  if (player.invincibleTimer > 0) player.invincibleTimer--;
+
   // Cooldowns
   if (player.shootCooldown > 0) player.shootCooldown--;
   for (const e of enemies) {
     if (e.alive && e.shootCooldown > 0) e.shootCooldown--;
   }
+
+  // Powerup pickup
+  for (const p of powerups) {
+    if (!p.alive) continue;
+    const dx = player.x - p.x, dy = player.y - p.y;
+    if (Math.sqrt(dx * dx + dy * dy) < player.size + 12) {
+      p.alive = false;
+      player.invincibleTimer = 600; // 10 seconds at 60fps
+    }
+  }
+  powerups = powerups.filter(p => p.alive);
+  // Powerup blink
+  for (const p of powerups) p.blink = (p.blink + 0.05) % (Math.PI * 2);
 
   // Enemy AI
   for (const e of enemies) {
@@ -365,19 +409,24 @@ function update() {
     if (!b.isPlayer && player.alive) {
       const dx = b.x - player.x, dy = b.y - player.y;
       if (Math.sqrt(dx * dx + dy * dy) < player.size) {
-        b.alive = false;
-        player.alive = false;
-        lives--;
-        explodeAt(player.x, player.y, 20);
-        if (lives <= 0) {
-          endGame();
+        if (player.invincibleTimer > 0) {
+          b.alive = false;
+          explodeAt(b.x, b.y, 6);
         } else {
-          setTimeout(() => {
-            player.x = 12 * CELL + CELL / 2;
-            player.y = ROWS * CELL - CELL * 1.5;
-            player.dir = DIR.UP;
-            player.alive = true;
-          }, 1000);
+          b.alive = false;
+          player.alive = false;
+          lives--;
+          explodeAt(player.x, player.y, 20);
+          if (lives <= 0) {
+            endGame();
+          } else {
+            setTimeout(() => {
+              player.x = 12 * CELL + CELL / 2;
+              player.y = ROWS * CELL - CELL * 1.5;
+              player.dir = DIR.UP;
+              player.alive = true;
+            }, 1000);
+          }
         }
       }
     }
@@ -409,6 +458,12 @@ function update() {
       spawnEnemy();
       lastEnemySpawn = now;
     }
+  }
+
+  // Spawn powerup
+  if (powerups.length === 0 && now - lastPowerupSpawn > powerupSpawnInterval) {
+    spawnPowerup();
+    lastPowerupSpawn = now;
   }
 
   // Particles
@@ -499,6 +554,34 @@ function drawParticle(p) {
   ctx.fill();
 }
 
+function drawPowerup(p) {
+  const alpha = 0.5 + Math.sin(p.blink) * 0.5;
+  const s = 10;
+
+  // Glow
+  ctx.fillStyle = `rgba(255, 215, 0, ${0.2 + alpha * 0.3})`;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, s + 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Star shape
+  ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    const angle = (i * 4 * Math.PI) / 5 - Math.PI / 2;
+    const innerAngle = angle + (2 * Math.PI) / 10;
+    const outerR = s, innerR = s * 0.4;
+    if (i === 0) ctx.moveTo(p.x + Math.cos(angle) * outerR, p.y + Math.sin(angle) * outerR);
+    else ctx.lineTo(p.x + Math.cos(angle) * outerR, p.y + Math.sin(angle) * outerR);
+    ctx.lineTo(p.x + Math.cos(innerAngle) * innerR, p.y + Math.sin(innerAngle) * innerR);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+}
+
 function render() {
   ctx.fillStyle = '#1a1a1a';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -525,11 +608,28 @@ function render() {
   // Bullets
   for (const b of bullets) drawBullet(b);
 
+  // Powerups
+  for (const p of powerups) drawPowerup(p);
+
   // Enemies
   for (const e of enemies) drawTank(e);
 
   // Player
-  if (player.alive) drawTank(player);
+  if (player.alive) {
+    if (player.invincibleTimer > 0) {
+      const ba = 0.3 + Math.sin(Date.now() * 0.02) * 0.2;
+      const g = ctx.createRadialGradient(player.x, player.y, player.size * 0.6, player.x, player.y, player.size * 1.3);
+      g.addColorStop(0, 'rgba(255,215,0,0)');
+      g.addColorStop(0.5, `rgba(255,215,0,${ba})`);
+      g.addColorStop(1, 'rgba(255,215,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(player.x, player.y, player.size * 1.3, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = `rgba(255,215,0,${0.6 + ba})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(player.x, player.y, player.size * 1.2, 0, Math.PI * 2); ctx.stroke();
+    }
+    drawTank(player);
+  }
 
   // Particles
   for (const p of particles) drawParticle(p);
@@ -538,6 +638,7 @@ function render() {
 function updateHUD() {
   document.getElementById('score').textContent = score;
   document.getElementById('lives').textContent = lives;
+  document.getElementById('invincible').textContent = player.invincibleTimer > 0 ? Math.ceil(player.invincibleTimer / 60) + 's' : '0s';
   document.getElementById('enemies').textContent = enemies.length;
   document.getElementById('level').textContent = level;
 }
@@ -557,7 +658,9 @@ function resetGame() {
   enemies = [];
   bullets = [];
   particles = [];
+  powerups = [];
   lastEnemySpawn = 0;
+  lastPowerupSpawn = 0;
   document.getElementById('game-over').style.display = 'none';
   updateHUD();
 }
@@ -581,9 +684,11 @@ function init() {
   enemies = [];
   bullets = [];
   particles = [];
+  powerups = [];
   updateHUD();
   for (let i = 0; i < 3; i++) setTimeout(() => spawnEnemy(), 500 + i * 800);
   lastEnemySpawn = Date.now();
+  lastPowerupSpawn = Date.now();
 }
 
 function gameLoop() {
